@@ -1,0 +1,21 @@
+{
+  "name": "짠토의 플래너",
+  "short_name": "짠토플래너",
+  "description": "🍅 짠토의 일정 & 할일 플래너",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FFF5F7",
+  "theme_color": "#FF4D6D",
+  "icons": [
+    {
+      "src": "icon.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
