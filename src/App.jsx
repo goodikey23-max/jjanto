@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 
 const C = {
   bg:"#FFF5F7", pink1:"#FFD6E0", pink2:"#FFB3C6", pink3:"#FF85A1",
@@ -47,7 +47,8 @@ const INIT_TODOS = {
 function load(key,fb){ try{ const v=localStorage.getItem(key); return v?JSON.parse(v):fb; }catch{ return fb; } }
 function save(key,v){ try{ localStorage.setItem(key,JSON.stringify(v)); }catch{} }
 
-// 한글 IME: value prop을 아예 쓰지 않음. 모달 초기값은 key로 리마운트해서 defaultValue로만 반영.
+// ── 한글 IME 입력: uncontrolled + 조합 중 상태 업데이트 차단 ──────────────
+// 반드시 App 밖 최상위에 정의해야 함 (안에 있으면 매 렌더마다 리마운트되어 IME 깨짐)
 function KoreanInput({ value, onChange, style, placeholder, autoFocus, type="text" }) {
   const composing = useRef(false);
   return (
@@ -80,6 +81,15 @@ function KoreanTextarea({ value, onChange, style, placeholder, rows, onKeyDown }
   );
 }
 
+// ── UI 공통 컴포넌트 (최상위 정의) ───────────────────────────────────────
+function ModalWrap({children, onClose, zIndex=100, isMobile}) {
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(60,20,30,.38)",display:"flex",alignItems:isMobile?"flex-end":"center",justifyContent:"center",zIndex}} onClick={onClose}>
+      <div style={{background:C.white,borderRadius:isMobile?"20px 20px 0 0":"20px",padding:26,width:isMobile?"100%":"390px",boxShadow:`0 20px 60px ${C.pink3}55`,maxHeight:"90vh",overflow:"auto"}} onClick={e=>e.stopPropagation()}>{children}</div>
+    </div>
+  );
+}
+
 function Ring({pct,size=56,stroke=5,color=C.rose,bg=C.pink1}) {
   const r=(size-stroke*2)/2, circ=2*Math.PI*r, off=circ-(pct/100)*circ;
   return (
@@ -95,6 +105,7 @@ function Ring({pct,size=56,stroke=5,color=C.rose,bg=C.pink1}) {
     </svg>
   );
 }
+
 function Bar({pct,color}) {
   return (
     <div style={{flex:1,height:6,borderRadius:99,background:C.pink1,overflow:"hidden"}}>
@@ -102,128 +113,13 @@ function Bar({pct,color}) {
     </div>
   );
 }
+
 const inp = {width:"100%",padding:"9px 12px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:14,outline:"none",boxSizing:"border-box",marginBottom:12,fontFamily:"inherit",background:"#FFF8FA",color:C.text};
 
-function useIsMobile() {
-  const [v,setV]=useState(()=>window.innerWidth<768);
-  useEffect(()=>{const h=()=>setV(window.innerWidth<768);window.addEventListener("resize",h);return()=>window.removeEventListener("resize",h);},[]);
-  return v;
-}
-
-export default function App() {
-  const isMobile = useIsMobile();
-
-  const [view,      setView]      = useState("month");
-  const [mobileTab, setMobileTab] = useState("month");
-  const [curDate,   setCurDate]   = useState(new Date(today.getFullYear(),today.getMonth(),1));
-  const [selDate,   setSelDate]   = useState(todayStr);
-  const [events,    setEvents]    = useState(()=>load("jjanto_events",INIT_EVENTS));
-  const [todos,     setTodos]     = useState(()=>load("jjanto_todos", INIT_TODOS));
-  const [cats,      setCats]      = useState(()=>load("jjanto_cats",  CAT_DEFAULTS));
-  const [sideOpen,  setSideOpen]  = useState(true);
-  const [hideCompleted,setHideCompleted]=useState({apptech:false});
-  const [sideFilter,setSideFilter]=useState("all");
-  const [shareCard, setShareCard] =useState(false);
-  const [syncModal, setSyncModal] =useState(false);
-  const [importMsg, setImportMsg] =useState(null);
-  const [memos,     setMemos]     =useState(()=>load("jjanto_memos",[]));
-  const [memoInput, setMemoInput] =useState("");
-  const cardRef=useRef(null);
-  const importRef=useRef(null);
-  const [modal,  setModal] =useState(null);
-  const [form,   setForm]  =useState({});
-  const [todoModal, setTodoModal] =useState(null);
-  const [todoForm,  setTodoForm]  =useState({title:"",date:todayStr});
-  const [catModal,  setCatModal]  =useState(null);
-  const [catForm,   setCatForm]   =useState({name:"",emoji:"⭐",color:C.pink3});
-
-  const setEventsS=v=>{ const n=typeof v==="function"?v(events):v; setEvents(n); save("jjanto_events",n); };
-  const setTodosS =v=>{ const n=typeof v==="function"?v(todos):v;  setTodos(n);  save("jjanto_todos",n);  };
-  const setCatsS  =v=>{ const n=typeof v==="function"?v(cats):v;   setCats(n);   save("jjanto_cats",n);   };
-  const setMemosS =v=>{ const n=typeof v==="function"?v(memos):v;  setMemos(n);  save("jjanto_memos",n);  };
-
-  function addMemo() {
-    if(!memoInput.trim()) return;
-    setMemosS(p=>[{id:genId(), text:memoInput.trim(), createdAt:new Date().toISOString()}, ...p]);
-    setMemoInput("");
-  }
-  function deleteMemo(id) { setMemosS(p=>p.filter(m=>m.id!==id)); }
-
-  function handleExport() {
-    const data = { events, todos, cats, memos, exportedAt: new Date().toISOString(), version: 1 };
-    const blob = new Blob([JSON.stringify(data, null, 2)], {type:"application/json"});
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href=url; a.download=`짠토플래너_${todayStr}.json`; a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function handleImport(e) {
-    const file = e.target.files?.[0];
-    if(!file) return;
-    const reader = new FileReader();
-    reader.onload = ev => {
-      try {
-        const data = JSON.parse(ev.target.result);
-        if(!data.events || !data.todos || !data.cats) throw new Error("올바른 파일이 아니에요");
-        setEventsS(data.events); setTodosS(data.todos); setCatsS(data.cats);
-        if(data.memos) setMemosS(data.memos);
-        setImportMsg({ type:"ok", text:`✅ 불러오기 완료! (${data.exportedAt ? new Date(data.exportedAt).toLocaleString("ko-KR") : "날짜 없음"} 저장본)` });
-      } catch(err) {
-        setImportMsg({ type:"err", text:"❌ 파일을 읽을 수 없어요: "+err.message });
-      }
-    };
-    reader.readAsText(file);
-    e.target.value = "";
-  }
-
-  const activeCats=cats.filter(c=>!c.hidden);
-  const catById=id=>cats.find(c=>c.id===id);
-  const allTodosOn=ds=>activeCats.flatMap(c=>(todos[c.id]||[]).filter(t=>!t.date||isSame(t.date,ds)));
-  const totalPctOn=ds=>{ const a=allTodosOn(ds); return a.length?Math.round(a.filter(t=>t.done).length/a.length*100):0; };
-  const catPctOn=(cid,ds)=>{ const i=(todos[cid]||[]).filter(t=>!t.date||isSame(t.date,ds)); return i.length?Math.round(i.filter(t=>t.done).length/i.length*100):0; };
-  function weeklyPct(wn,cid) {
-    const y=curDate.getFullYear(),m=curDate.getMonth(),last=new Date(y,m+1,0).getDate();
-    let done=0,total=0;
-    for(let d=1;d<=last;d++){
-      const ds=fmtDate(new Date(y,m,d));
-      if(getWeekOfMonth(ds)!==wn) continue;
-      const items=cid?(todos[cid]||[]).filter(t=>t.date?isSame(t.date,ds):true):activeCats.flatMap(c=>(todos[c.id]||[]).filter(t=>t.date?isSame(t.date,ds):true));
-      total+=items.length; done+=items.filter(t=>t.done).length;
-    }
-    return total?Math.round(done/total*100):null;
-  }
-  function weeksInMonth(){
-    const y=curDate.getFullYear(),m=curDate.getMonth(),last=new Date(y,m+1,0).getDate();
-    const ws=new Set(); for(let d=1;d<=last;d++) ws.add(getWeekOfMonth(fmtDate(new Date(y,m,d)))); return [...ws].sort();
-  }
-  const eventsOn=ds=>events.filter(e=>e.allDay&&e.endDate?ds>=e.date&&ds<=e.endDate:isSame(e.date,ds)).sort((a,b)=>(a.time||"").localeCompare(b.time||""));
-
-  function openAddEvent(date){ const fc=activeCats[0]; setForm({title:"",date:date||selDate,endDate:"",time:"",allDay:false,catId:fc?.id||"",color:fc?.color||C.pink3,done:false}); setModal("addEvent"); }
-  function openEditEvent(e){ setForm({...e}); setModal("editEvent"); }
-  function saveEvent(){ if(!form.title.trim()) return; const cat=catById(form.catId); const c={...form,color:cat?.color||form.color}; if(modal==="addEvent") setEventsS(p=>[...p,{...c,id:genId()}]); else setEventsS(p=>p.map(e=>e.id===form.id?{...c}:e)); setModal(null); }
-  function deleteEvent(id){ setEventsS(p=>p.filter(e=>e.id!==id)); setModal(null); }
-  function openAddTodo(cid){ setTodoForm({title:"",date:""}); setTodoModal({mode:"add",catId:cid}); }
-  function openEditTodo(cid,item){ setTodoForm({title:item.title,date:item.date||""}); setTodoModal({mode:"edit",catId:cid,item}); }
-  function saveTodo(){ if(!todoForm.title.trim()) return; const {mode,catId,item}=todoModal; if(mode==="add") setTodosS(p=>({...p,[catId]:[...(p[catId]||[]),{id:genId(),title:todoForm.title,date:todoForm.date,done:false}]})); else setTodosS(p=>({...p,[catId]:p[catId].map(t=>t.id===item.id?{...t,title:todoForm.title,date:todoForm.date}:t)})); setTodoModal(null); }
-  function deleteTodo(cid,id){ setTodosS(p=>({...p,[cid]:p[cid].filter(t=>t.id!==id)})); setTodoModal(null); }
-  function toggleTodo(cid,id){ setTodosS(p=>({...p,[cid]:p[cid].map(t=>t.id===id?{...t,done:!t.done}:t)})); }
-  function saveCat(){ if(!catForm.name.trim()) return; if(catModal==="add"){ const nid=genId(); setCatsS(p=>[...p,{id:nid,...catForm,hidden:false}]); setTodosS(p=>({...p,[nid]:[]})); } else setCatsS(p=>p.map(c=>c.id===catModal.id?{...c,...catForm}:c)); setCatModal(null); }
-  function hideCat(id){ setCatsS(p=>p.map(c=>c.id===id?{...c,hidden:true}:c)); setCatModal(null); }
-  function showCat(id){ setCatsS(p=>p.map(c=>c.id===id?{...c,hidden:false}:c)); }
-
-  function buildGrid(){ const y=curDate.getFullYear(),m=curDate.getMonth(),first=new Date(y,m,1).getDay(),last=new Date(y,m+1,0).getDate(),cells=[]; for(let i=0;i<first;i++) cells.push(null); for(let d=1;d<=last;d++) cells.push(new Date(y,m,d)); return cells; }
-  const cells=buildGrid(), weeks=weeksInMonth();
-  const sideEvents=sideFilter==="all"?eventsOn(todayStr):eventsOn(todayStr).filter(e=>e.catId===sideFilter);
-
-  const ModalWrap=({children,onClose,zIndex=100})=>(
-    <div style={{position:"fixed",inset:0,background:"rgba(60,20,30,.38)",display:"flex",alignItems:isMobile?"flex-end":"center",justifyContent:"center",zIndex}} onClick={onClose}>
-      <div style={{background:C.white,borderRadius:isMobile?"20px 20px 0 0":"20px",padding:26,width:isMobile?"100%":"390px",boxShadow:`0 20px 60px ${C.pink3}55`,maxHeight:"90vh",overflow:"auto"}} onClick={e=>e.stopPropagation()}>{children}</div>
-    </div>
-  );
-
-  const SyncModal = () => (
-    <ModalWrap onClose={()=>{ setSyncModal(false); setImportMsg(null); }} zIndex={200}>
+// ── 각 뷰 컴포넌트 (최상위 정의) ─────────────────────────────────────────
+function SyncModal({onClose, handleExport, handleImport, importRef, importMsg, isMobile}) {
+  return (
+    <ModalWrap onClose={onClose} zIndex={200} isMobile={isMobile}>
       <div style={{fontSize:16,fontWeight:800,color:C.rose,marginBottom:6}}>🔄 기기 간 데이터 동기화</div>
       <div style={{fontSize:12,color:C.sub,marginBottom:20,lineHeight:1.7}}>JSON 파일로 데이터를 주고받아요.<br/>컴퓨터 ↔ 핸드폰 어디서든 쓸 수 있어요!</div>
       <div style={{background:"#FFF0F5",borderRadius:14,padding:"16px",marginBottom:12,border:`1.5px solid ${C.border}`}}>
@@ -243,11 +139,13 @@ export default function App() {
         <div style={{fontSize:11,fontWeight:800,color:C.sub,marginBottom:6}}>💡 이렇게 쓰세요</div>
         <div style={{fontSize:11,color:C.sub,lineHeight:1.8}}>1️⃣ 컴퓨터에서 <b>내보내기</b> → 파일 저장<br/>2️⃣ 파일을 카카오톡·이메일로 폰에 전송<br/>3️⃣ 폰에서 <b>가져오기</b> → 파일 선택</div>
       </div>
-      <button onClick={()=>{ setSyncModal(false); setImportMsg(null); }} style={{width:"100%",marginTop:14,padding:"11px",borderRadius:10,background:C.pink1,color:C.sub,border:"none",fontWeight:700,fontSize:14,cursor:"pointer"}}>닫기</button>
+      <button onClick={onClose} style={{width:"100%",marginTop:14,padding:"11px",borderRadius:10,background:C.pink1,color:C.sub,border:"none",fontWeight:700,fontSize:14,cursor:"pointer"}}>닫기</button>
     </ModalWrap>
   );
+}
 
-  const SidebarContent=()=>(
+function Sidebar({isMobile, view, setView, setSyncModal, sideFilter, setSideFilter, activeCats, sideEvents, catById, weeks, weeklyPct, cats, showCat, events, openEditEvent}) {
+  return (
     <div style={{padding:"18px 14px",display:"flex",flexDirection:"column",gap:2,overflow:"auto",flex:1}}>
       {!isMobile&&<div style={{fontSize:19,fontWeight:800,color:C.rose,padding:"2px 6px 10px",display:"flex",alignItems:"center",gap:8}}>🍅 짠토의 플래너</div>}
       <button onClick={()=>setSyncModal(true)} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 12px",borderRadius:12,cursor:"pointer",fontSize:13,fontWeight:700,background:"linear-gradient(135deg,#E8F5E9,#F0FFF8)",color:"#2E7D32",border:"1.5px solid #A5D6A7",width:"100%",textAlign:"left",marginBottom:6}}>
@@ -308,8 +206,10 @@ export default function App() {
       <div style={{marginTop:"auto",paddingTop:10,fontSize:11,color:C.sub,textAlign:"center"}}>총 {events.length}개 일정 🍓</div>
     </div>
   );
+}
 
-  const MonthView=()=>(
+function MonthView({isMobile, cells, eventsOn, allTodosOn, selDate, todayStr, setSelDate, setMobileTab, openEditEvent}) {
+  return (
     <div style={{display:"flex",flexDirection:"column",flex:1,overflow:"hidden"}}>
       <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",background:C.white,borderBottom:`1px solid ${C.border}`}}>
         {DAYS_KO.map((d,i)=><div key={d} style={{padding:isMobile?"5px 0":"8px 0",textAlign:"center",fontSize:isMobile?11:12,fontWeight:800,color:[0,6].includes(i)?C.rose:C.sub}}>{d}</div>)}
@@ -319,7 +219,7 @@ export default function App() {
           if(!day) return <div key={i} style={{background:"#fff8fa",borderRight:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`}}/>;
           const ds=fmtDate(day),isToday=isSame(ds,todayStr),isSel=ds===selDate;
           const dayEvs=eventsOn(ds),maxEvs=isMobile?1:3;
-          const dPct=(()=>{ const a=allTodosOn(ds); return a.length?Math.round(a.filter(t=>t.done).length/a.length*100):null; })();
+          const a=allTodosOn(ds), dPct=a.length?Math.round(a.filter(t=>t.done).length/a.length*100):null;
           return (
             <div key={i} onClick={()=>{ setSelDate(ds); if(isMobile) setMobileTab("today"); }} style={{padding:isMobile?"3px 2px":"5px 6px",borderRight:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,minHeight:isMobile?56:88,cursor:"pointer",background:isSel?"#fff0f3":isToday?"#fff8fb":C.white}}>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
@@ -338,8 +238,10 @@ export default function App() {
       </div>
     </div>
   );
+}
 
-  const ListView=()=>(
+function ListView({isMobile, selDate, setSelDate, todayStr, allTodosOn, totalPctOn, catPctOn, activeCats, todos, isSameDate, openAddTodo, openEditTodo, toggleTodo, hideCompleted, setHideCompleted, setCatForm, setCatModal, setShareCard}) {
+  return (
     <div style={{flex:1,overflow:"auto",padding:isMobile?"12px 14px":"16px 20px"}}>
       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16,flexWrap:"wrap"}}>
         <div style={{display:"flex",alignItems:"center",gap:6}}>
@@ -406,47 +308,49 @@ export default function App() {
       </div>
     </div>
   );
+}
 
-  const TodayMobileView=()=>{
-    const evs=eventsOn(selDate);
-    return (
-      <div style={{flex:1,overflow:"auto",padding:"14px 14px 80px"}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
-          <div><div style={{fontSize:18,fontWeight:800,color:C.rose}}>{selDate===todayStr?"오늘":selDate}</div><div style={{fontSize:12,color:C.sub}}>{new Date(selDate).toLocaleDateString("ko-KR",{month:"long",day:"numeric",weekday:"short"})}</div></div>
-          <div style={{display:"flex",gap:6}}>
-            <button onClick={()=>{const d=new Date(selDate);d.setDate(d.getDate()-1);setSelDate(fmtDate(d));}} style={{background:C.pink1,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.rose,fontWeight:800}}>‹</button>
-            <button onClick={()=>setSelDate(todayStr)} style={{background:C.pink2,border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",color:C.white,fontWeight:700,fontSize:12}}>오늘</button>
-            <button onClick={()=>{const d=new Date(selDate);d.setDate(d.getDate()+1);setSelDate(fmtDate(d));}} style={{background:C.pink1,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.rose,fontWeight:800}}>›</button>
-          </div>
+function TodayMobileView({selDate, setSelDate, todayStr, eventsOn, catById, allTodosOn, totalPctOn, catPctOn, activeCats, todos, toggleTodo, openAddTodo, openAddEvent, setSyncModal}) {
+  const evs=eventsOn(selDate);
+  return (
+    <div style={{flex:1,overflow:"auto",padding:"14px 14px 80px"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+        <div><div style={{fontSize:18,fontWeight:800,color:C.rose}}>{selDate===todayStr?"오늘":selDate}</div><div style={{fontSize:12,color:C.sub}}>{new Date(selDate).toLocaleDateString("ko-KR",{month:"long",day:"numeric",weekday:"short"})}</div></div>
+        <div style={{display:"flex",gap:6}}>
+          <button onClick={()=>{const d=new Date(selDate);d.setDate(d.getDate()-1);setSelDate(fmtDate(d));}} style={{background:C.pink1,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.rose,fontWeight:800}}>‹</button>
+          <button onClick={()=>setSelDate(todayStr)} style={{background:C.pink2,border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",color:C.white,fontWeight:700,fontSize:12}}>오늘</button>
+          <button onClick={()=>{const d=new Date(selDate);d.setDate(d.getDate()+1);setSelDate(fmtDate(d));}} style={{background:C.pink1,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.rose,fontWeight:800}}>›</button>
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:12,background:C.white,borderRadius:16,padding:"12px 16px",border:`1.5px solid ${C.border}`,marginBottom:14}}>
-          <Ring pct={totalPctOn(selDate)} size={52} stroke={5} color={C.rose} bg={C.pink1}/>
-          <div style={{flex:1}}><div style={{fontSize:14,fontWeight:800,color:C.rose}}>총 달성률</div><div style={{fontSize:12,color:C.sub}}>{allTodosOn(selDate).filter(t=>t.done).length}/{allTodosOn(selDate).length} 완료</div></div>
-          <button onClick={()=>setSyncModal(true)} style={{background:"linear-gradient(135deg,#E8F5E9,#C8E6C9)",border:"1.5px solid #A5D6A7",borderRadius:10,padding:"7px 12px",cursor:"pointer",color:"#2E7D32",fontWeight:800,fontSize:12}}>🔄 동기화</button>
-        </div>
-        {evs.length>0&&<><div style={{fontSize:12,fontWeight:800,color:C.sub,marginBottom:8}}>📅 일정</div>{evs.map(e=>{ const cat=catById(e.catId); return <div key={e.id} onClick={()=>openEditEvent(e)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:C.white,borderRadius:12,marginBottom:6,border:`1.5px solid ${e.color}33`,cursor:"pointer"}}><span style={{fontSize:18}}>{cat?.emoji||"📌"}</span><div style={{flex:1}}><div style={{fontSize:13,fontWeight:700}}>{e.title}</div><div style={{fontSize:11,color:C.sub}}>{e.time||"종일"}</div></div></div>; })}</>}
-        <div style={{fontSize:12,fontWeight:800,color:C.sub,marginBottom:8}}>✅ 할 일</div>
-        {activeCats.map(cat=>{ const items=(todos[cat.id]||[]).filter(t=>!t.date||isSame(t.date,selDate)); if(!items.length) return null; return (
-          <div key={cat.id} style={{background:C.white,borderRadius:14,padding:"12px 14px",border:`1.5px solid ${C.border}`,marginBottom:10}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
-              <div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:16}}>{cat.emoji}</span><span style={{fontSize:13,fontWeight:800}}>{cat.name}</span></div>
-              <div style={{display:"flex",gap:6}}><span style={{fontSize:11,fontWeight:700,color:cat.color}}>{catPctOn(cat.id,selDate)}%</span><button onClick={()=>openAddTodo(cat.id)} style={{background:cat.color,border:"none",borderRadius:8,padding:"3px 10px",cursor:"pointer",color:C.white,fontWeight:800}}>+</button></div>
-            </div>
-            <div style={{height:4,borderRadius:99,background:C.pink1,overflow:"hidden",marginBottom:8}}><div style={{width:`${catPctOn(cat.id,selDate)}%`,height:"100%",borderRadius:99,background:cat.color}}/></div>
-            {items.map(item=>(
-              <div key={item.id} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 0",borderBottom:`1px dashed ${C.border}`}}>
-                <input type="checkbox" checked={item.done} onChange={()=>toggleTodo(cat.id,item.id)} style={{width:20,height:20,accentColor:cat.color,cursor:"pointer",flexShrink:0}}/>
-                <span style={{flex:1,fontSize:14,color:item.done?C.sub:C.text,textDecoration:item.done?"line-through":"none"}}>{item.title}</span>
-              </div>
-            ))}
-          </div>
-        );})}
-        <button onClick={()=>openAddEvent(selDate)} style={{width:"100%",padding:"13px",borderRadius:14,background:`linear-gradient(135deg,${C.pink3},${C.rose})`,color:C.white,border:"none",fontWeight:800,fontSize:15,cursor:"pointer",marginTop:4}}>🍅 일정 추가</button>
       </div>
-    );
-  };
+      <div style={{display:"flex",alignItems:"center",gap:12,background:C.white,borderRadius:16,padding:"12px 16px",border:`1.5px solid ${C.border}`,marginBottom:14}}>
+        <Ring pct={totalPctOn(selDate)} size={52} stroke={5} color={C.rose} bg={C.pink1}/>
+        <div style={{flex:1}}><div style={{fontSize:14,fontWeight:800,color:C.rose}}>총 달성률</div><div style={{fontSize:12,color:C.sub}}>{allTodosOn(selDate).filter(t=>t.done).length}/{allTodosOn(selDate).length} 완료</div></div>
+        <button onClick={()=>setSyncModal(true)} style={{background:"linear-gradient(135deg,#E8F5E9,#C8E6C9)",border:"1.5px solid #A5D6A7",borderRadius:10,padding:"7px 12px",cursor:"pointer",color:"#2E7D32",fontWeight:800,fontSize:12}}>🔄 동기화</button>
+      </div>
+      {evs.length>0&&<><div style={{fontSize:12,fontWeight:800,color:C.sub,marginBottom:8}}>📅 일정</div>{evs.map(e=>{ const cat=catById(e.catId); return <div key={e.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:C.white,borderRadius:12,marginBottom:6,border:`1.5px solid ${e.color}33`,cursor:"pointer"}}><span style={{fontSize:18}}>{cat?.emoji||"📌"}</span><div style={{flex:1}}><div style={{fontSize:13,fontWeight:700}}>{e.title}</div><div style={{fontSize:11,color:C.sub}}>{e.time||"종일"}</div></div></div>; })}</>}
+      <div style={{fontSize:12,fontWeight:800,color:C.sub,marginBottom:8}}>✅ 할 일</div>
+      {activeCats.map(cat=>{ const items=(todos[cat.id]||[]).filter(t=>!t.date||isSame(t.date,selDate)); if(!items.length) return null; return (
+        <div key={cat.id} style={{background:C.white,borderRadius:14,padding:"12px 14px",border:`1.5px solid ${C.border}`,marginBottom:10}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+            <div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:16}}>{cat.emoji}</span><span style={{fontSize:13,fontWeight:800}}>{cat.name}</span></div>
+            <div style={{display:"flex",gap:6}}><span style={{fontSize:11,fontWeight:700,color:cat.color}}>{catPctOn(cat.id,selDate)}%</span><button onClick={()=>openAddTodo(cat.id)} style={{background:cat.color,border:"none",borderRadius:8,padding:"3px 10px",cursor:"pointer",color:C.white,fontWeight:800}}>+</button></div>
+          </div>
+          <div style={{height:4,borderRadius:99,background:C.pink1,overflow:"hidden",marginBottom:8}}><div style={{width:`${catPctOn(cat.id,selDate)}%`,height:"100%",borderRadius:99,background:cat.color}}/></div>
+          {items.map(item=>(
+            <div key={item.id} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 0",borderBottom:`1px dashed ${C.border}`}}>
+              <input type="checkbox" checked={item.done} onChange={()=>toggleTodo(cat.id,item.id)} style={{width:20,height:20,accentColor:cat.color,cursor:"pointer",flexShrink:0}}/>
+              <span style={{flex:1,fontSize:14,color:item.done?C.sub:C.text,textDecoration:item.done?"line-through":"none"}}>{item.title}</span>
+            </div>
+          ))}
+        </div>
+      );})}
+      <button onClick={()=>openAddEvent(selDate)} style={{width:"100%",padding:"13px",borderRadius:14,background:`linear-gradient(135deg,${C.pink3},${C.rose})`,color:C.white,border:"none",fontWeight:800,fontSize:15,cursor:"pointer",marginTop:4}}>🍅 일정 추가</button>
+    </div>
+  );
+}
 
-  const MemoView=()=>(
+function MemoView({isMobile, memos, memoInput, setMemoInput, addMemo, deleteMemo}) {
+  return (
     <div style={{flex:1,overflow:"auto",padding:isMobile?"14px 14px 80px":"20px 24px"}}>
       <div style={{maxWidth:600,margin:"0 auto"}}>
         <div style={{fontSize:18,fontWeight:800,color:C.rose,marginBottom:16}}>🗒️ 메모</div>
@@ -481,6 +385,113 @@ export default function App() {
       </div>
     </div>
   );
+}
+
+// ── 메인 App: 상태 관리만 담당 ────────────────────────────────────────────
+export default function App() {
+  const [isMobile, setIsMobile] = useState(()=>window.innerWidth<768);
+  useState(()=>{ const h=()=>setIsMobile(window.innerWidth<768); window.addEventListener("resize",h); return ()=>window.removeEventListener("resize",h); });
+
+  const [view,      setView]      = useState("month");
+  const [mobileTab, setMobileTab] = useState("month");
+  const [curDate,   setCurDate]   = useState(new Date(today.getFullYear(),today.getMonth(),1));
+  const [selDate,   setSelDate]   = useState(todayStr);
+  const [events,    setEvents]    = useState(()=>load("jjanto_events",INIT_EVENTS));
+  const [todos,     setTodos]     = useState(()=>load("jjanto_todos", INIT_TODOS));
+  const [cats,      setCats]      = useState(()=>load("jjanto_cats",  CAT_DEFAULTS));
+  const [sideOpen,  setSideOpen]  = useState(true);
+  const [hideCompleted,setHideCompleted]=useState({apptech:false});
+  const [sideFilter,setSideFilter]=useState("all");
+  const [shareCard, setShareCard] =useState(false);
+  const [syncModal, setSyncModal] =useState(false);
+  const [importMsg, setImportMsg] =useState(null);
+  const [memos,     setMemos]     =useState(()=>load("jjanto_memos",[]));
+  const [memoInput, setMemoInput] =useState("");
+  const cardRef=useRef(null);
+  const importRef=useRef(null);
+  const [modal,  setModal] =useState(null);
+  const [form,   setForm]  =useState({});
+  const [todoModal, setTodoModal] =useState(null);
+  const [todoForm,  setTodoForm]  =useState({title:"",date:todayStr});
+  const [catModal,  setCatModal]  =useState(null);
+  const [catForm,   setCatForm]   =useState({name:"",emoji:"⭐",color:C.pink3});
+
+  const setEventsS=v=>{ const n=typeof v==="function"?v(events):v; setEvents(n); save("jjanto_events",n); };
+  const setTodosS =v=>{ const n=typeof v==="function"?v(todos):v;  setTodos(n);  save("jjanto_todos",n);  };
+  const setCatsS  =v=>{ const n=typeof v==="function"?v(cats):v;   setCats(n);   save("jjanto_cats",n);   };
+  const setMemosS =v=>{ const n=typeof v==="function"?v(memos):v;  setMemos(n);  save("jjanto_memos",n);  };
+
+  function addMemo() {
+    if(!memoInput.trim()) return;
+    setMemosS(p=>[{id:genId(), text:memoInput.trim(), createdAt:new Date().toISOString()}, ...p]);
+    setMemoInput("");
+  }
+  function deleteMemo(id) { setMemosS(p=>p.filter(m=>m.id!==id)); }
+
+  function handleExport() {
+    const data = { events, todos, cats, memos, exportedAt: new Date().toISOString(), version: 1 };
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type:"application/json"});
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href=url; a.download=`짠토플래너_${todayStr}.json`; a.click();
+    URL.revokeObjectURL(url);
+  }
+  function handleImport(e) {
+    const file = e.target.files?.[0]; if(!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if(!data.events || !data.todos || !data.cats) throw new Error("올바른 파일이 아니에요");
+        setEventsS(data.events); setTodosS(data.todos); setCatsS(data.cats);
+        if(data.memos) setMemosS(data.memos);
+        setImportMsg({ type:"ok", text:`✅ 불러오기 완료! (${data.exportedAt ? new Date(data.exportedAt).toLocaleString("ko-KR") : "날짜 없음"} 저장본)` });
+      } catch(err) { setImportMsg({ type:"err", text:"❌ 파일을 읽을 수 없어요: "+err.message }); }
+    };
+    reader.readAsText(file); e.target.value="";
+  }
+
+  const activeCats=cats.filter(c=>!c.hidden);
+  const catById=id=>cats.find(c=>c.id===id);
+  const allTodosOn=ds=>activeCats.flatMap(c=>(todos[c.id]||[]).filter(t=>!t.date||isSame(t.date,ds)));
+  const totalPctOn=ds=>{ const a=allTodosOn(ds); return a.length?Math.round(a.filter(t=>t.done).length/a.length*100):0; };
+  const catPctOn=(cid,ds)=>{ const i=(todos[cid]||[]).filter(t=>!t.date||isSame(t.date,ds)); return i.length?Math.round(i.filter(t=>t.done).length/i.length*100):0; };
+  function weeklyPct(wn,cid) {
+    const y=curDate.getFullYear(),m=curDate.getMonth(),last=new Date(y,m+1,0).getDate();
+    let done=0,total=0;
+    for(let d=1;d<=last;d++){
+      const ds=fmtDate(new Date(y,m,d));
+      if(getWeekOfMonth(ds)!==wn) continue;
+      const items=cid?(todos[cid]||[]).filter(t=>t.date?isSame(t.date,ds):true):activeCats.flatMap(c=>(todos[c.id]||[]).filter(t=>t.date?isSame(t.date,ds):true));
+      total+=items.length; done+=items.filter(t=>t.done).length;
+    }
+    return total?Math.round(done/total*100):null;
+  }
+  function weeksInMonth(){
+    const y=curDate.getFullYear(),m=curDate.getMonth(),last=new Date(y,m+1,0).getDate();
+    const ws=new Set(); for(let d=1;d<=last;d++) ws.add(getWeekOfMonth(fmtDate(new Date(y,m,d)))); return [...ws].sort();
+  }
+  const eventsOn=ds=>events.filter(e=>e.allDay&&e.endDate?ds>=e.date&&ds<=e.endDate:isSame(e.date,ds)).sort((a,b)=>(a.time||"").localeCompare(b.time||""));
+
+  function openAddEvent(date){ const fc=activeCats[0]; setForm({title:"",date:date||selDate,endDate:"",time:"",allDay:false,catId:fc?.id||"",color:fc?.color||C.pink3,done:false}); setModal("addEvent"); }
+  function openEditEvent(e){ setForm({...e}); setModal("editEvent"); }
+  function saveEvent(){ if(!form.title.trim()) return; const cat=catById(form.catId); const c={...form,color:cat?.color||form.color}; if(modal==="addEvent") setEventsS(p=>[...p,{...c,id:genId()}]); else setEventsS(p=>p.map(e=>e.id===form.id?{...c}:e)); setModal(null); }
+  function deleteEvent(id){ setEventsS(p=>p.filter(e=>e.id!==id)); setModal(null); }
+  function openAddTodo(cid){ setTodoForm({title:"",date:""}); setTodoModal({mode:"add",catId:cid}); }
+  function openEditTodo(cid,item){ setTodoForm({title:item.title,date:item.date||""}); setTodoModal({mode:"edit",catId:cid,item}); }
+  function saveTodo(){ if(!todoForm.title.trim()) return; const {mode,catId,item}=todoModal; if(mode==="add") setTodosS(p=>({...p,[catId]:[...(p[catId]||[]),{id:genId(),title:todoForm.title,date:todoForm.date,done:false}]})); else setTodosS(p=>({...p,[catId]:p[catId].map(t=>t.id===item.id?{...t,title:todoForm.title,date:todoForm.date}:t)})); setTodoModal(null); }
+  function deleteTodo(cid,id){ setTodosS(p=>({...p,[cid]:p[cid].filter(t=>t.id!==id)})); setTodoModal(null); }
+  function toggleTodo(cid,id){ setTodosS(p=>({...p,[cid]:p[cid].map(t=>t.id===id?{...t,done:!t.done}:t)})); }
+  function saveCat(){ if(!catForm.name.trim()) return; if(catModal==="add"){ const nid=genId(); setCatsS(p=>[...p,{id:nid,...catForm,hidden:false}]); setTodosS(p=>({...p,[nid]:[]})); } else setCatsS(p=>p.map(c=>c.id===catModal.id?{...c,...catForm}:c)); setCatModal(null); }
+  function hideCat(id){ setCatsS(p=>p.map(c=>c.id===id?{...c,hidden:true}:c)); setCatModal(null); }
+  function showCat(id){ setCatsS(p=>p.map(c=>c.id===id?{...c,hidden:false}:c)); }
+
+  function buildGrid(){ const y=curDate.getFullYear(),m=curDate.getMonth(),first=new Date(y,m,1).getDay(),last=new Date(y,m+1,0).getDate(),cells=[]; for(let i=0;i<first;i++) cells.push(null); for(let d=1;d<=last;d++) cells.push(new Date(y,m,d)); return cells; }
+  const cells=buildGrid(), weeks=weeksInMonth();
+  const sideEvents=sideFilter==="all"?eventsOn(todayStr):eventsOn(todayStr).filter(e=>e.catId===sideFilter);
+
+  // 공통 props
+  const commonProps = { isMobile, selDate, setSelDate, todayStr, allTodosOn, totalPctOn, catPctOn, activeCats, todos, toggleTodo, openAddTodo, openAddEvent, setSyncModal, eventsOn, catById };
 
   return (
     <div style={{display:"flex",height:"100vh",fontFamily:"'Nunito','Apple SD Gothic Neo',sans-serif",background:C.bg,color:C.text,overflow:"hidden",flexDirection:"column"}}>
@@ -488,7 +499,7 @@ export default function App() {
       {!isMobile&&(
         <div style={{display:"flex",flex:1,overflow:"hidden"}}>
           <aside style={{width:sideOpen?260:0,minWidth:sideOpen?260:0,background:"linear-gradient(160deg,#fff0f3,#ffe4ec)",borderRight:`1.5px solid ${C.border}`,display:"flex",flexDirection:"column",overflow:"hidden",transition:"all .25s",flexShrink:0}}>
-            <SidebarContent/>
+            <Sidebar isMobile={isMobile} view={view} setView={setView} setSyncModal={setSyncModal} sideFilter={sideFilter} setSideFilter={setSideFilter} activeCats={activeCats} sideEvents={sideEvents} catById={catById} weeks={weeks} weeklyPct={weeklyPct} cats={cats} showCat={showCat} events={events} openEditEvent={openEditEvent}/>
           </aside>
           <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
             <div style={{display:"flex",alignItems:"center",gap:8,padding:"10px 18px",borderBottom:`1.5px solid ${C.border}`,background:C.white,flexWrap:"wrap"}}>
@@ -501,9 +512,9 @@ export default function App() {
               {["month","list","memo"].map(v=><button key={v} onClick={()=>setView(v)} style={{padding:"6px 14px",borderRadius:20,border:`2px solid ${view===v?C.rose:C.border}`,background:view===v?C.rose:C.white,color:view===v?C.white:C.sub,fontSize:12,cursor:"pointer",fontWeight:700}}>{v==="month"?"🗓 월간":v==="list"?"✅ 할일":"🗒️ 메모"}</button>)}
               <button onClick={()=>openAddEvent(selDate)} style={{padding:"7px 16px",borderRadius:20,background:`linear-gradient(135deg,${C.pink3},${C.rose})`,color:C.white,border:"none",fontWeight:800,fontSize:13,cursor:"pointer"}}>🍅 추가</button>
             </div>
-            {view==="month"&&<MonthView/>}
-            {view==="list"&&<ListView/>}
-            {view==="memo"&&<MemoView/>}
+            {view==="month"&&<MonthView isMobile={isMobile} cells={cells} eventsOn={eventsOn} allTodosOn={allTodosOn} selDate={selDate} todayStr={todayStr} setSelDate={setSelDate} setMobileTab={setMobileTab} openEditEvent={openEditEvent}/>}
+            {view==="list"&&<ListView isMobile={isMobile} selDate={selDate} setSelDate={setSelDate} todayStr={todayStr} allTodosOn={allTodosOn} totalPctOn={totalPctOn} catPctOn={catPctOn} activeCats={activeCats} todos={todos} openAddTodo={openAddTodo} openEditTodo={openEditTodo} toggleTodo={toggleTodo} hideCompleted={hideCompleted} setHideCompleted={setHideCompleted} setCatForm={setCatForm} setCatModal={setCatModal} setShareCard={setShareCard}/>}
+            {view==="memo"&&<MemoView isMobile={isMobile} memos={memos} memoInput={memoInput} setMemoInput={setMemoInput} addMemo={addMemo} deleteMemo={deleteMemo}/>}
           </div>
         </div>
       )}
@@ -518,10 +529,10 @@ export default function App() {
             </div>
           </div>
           <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
-            {mobileTab==="month"&&<MonthView/>}
-            {mobileTab==="list"&&<ListView/>}
-            {mobileTab==="today"&&<TodayMobileView/>}
-            {mobileTab==="memo"&&<MemoView/>}
+            {mobileTab==="month"&&<MonthView isMobile={isMobile} cells={cells} eventsOn={eventsOn} allTodosOn={allTodosOn} selDate={selDate} todayStr={todayStr} setSelDate={setSelDate} setMobileTab={setMobileTab} openEditEvent={openEditEvent}/>}
+            {mobileTab==="list"&&<ListView isMobile={isMobile} selDate={selDate} setSelDate={setSelDate} todayStr={todayStr} allTodosOn={allTodosOn} totalPctOn={totalPctOn} catPctOn={catPctOn} activeCats={activeCats} todos={todos} openAddTodo={openAddTodo} openEditTodo={openEditTodo} toggleTodo={toggleTodo} hideCompleted={hideCompleted} setHideCompleted={setHideCompleted} setCatForm={setCatForm} setCatModal={setCatModal} setShareCard={setShareCard}/>}
+            {mobileTab==="today"&&<TodayMobileView {...commonProps} openEditTodo={openEditTodo}/>}
+            {mobileTab==="memo"&&<MemoView isMobile={isMobile} memos={memos} memoInput={memoInput} setMemoInput={setMemoInput} addMemo={addMemo} deleteMemo={deleteMemo}/>}
           </div>
           <div style={{display:"flex",borderTop:`1.5px solid ${C.border}`,background:C.white,flexShrink:0,paddingBottom:"env(safe-area-inset-bottom)"}}>
             {[{tab:"month",icon:"🗓️",label:"캘린더"},{tab:"today",icon:"✨",label:"오늘"},{tab:"list",icon:"✅",label:"할일"},{tab:"memo",icon:"🗒️",label:"메모"},{tab:"sync",icon:"🔄",label:"동기화"}].map(({tab,icon,label})=>(
@@ -537,10 +548,10 @@ export default function App() {
 
       {!isMobile&&<button onClick={()=>openAddEvent(selDate)} style={{position:"fixed",bottom:24,right:24,width:52,height:52,borderRadius:"50%",background:`linear-gradient(135deg,${C.pink3},${C.rose})`,color:C.white,border:"none",fontSize:26,cursor:"pointer",boxShadow:`0 4px 20px ${C.rose}66`,display:"flex",alignItems:"center",justifyContent:"center",zIndex:50}}>🍅</button>}
 
-      {syncModal&&<SyncModal/>}
+      {syncModal&&<SyncModal onClose={()=>{setSyncModal(false);setImportMsg(null);}} handleExport={handleExport} handleImport={handleImport} importRef={importRef} importMsg={importMsg} isMobile={isMobile}/>}
 
       {(modal==="addEvent"||modal==="editEvent")&&(
-        <ModalWrap onClose={()=>setModal(null)}>
+        <ModalWrap onClose={()=>setModal(null)} isMobile={isMobile}>
           <div style={{fontSize:16,fontWeight:800,color:C.rose,marginBottom:16}}>🍅 {modal==="addEvent"?"새 일정 추가":"일정 편집"}</div>
           <label style={{fontSize:11,fontWeight:800,color:C.sub,marginBottom:4,display:"block"}}>제목</label>
           <KoreanInput key={form.id||"new-event"} style={inp} placeholder="일정 제목" value={form.title||""} onChange={v=>setForm(p=>({...p,title:v}))} autoFocus/>
@@ -574,7 +585,7 @@ export default function App() {
       )}
 
       {todoModal&&(
-        <ModalWrap onClose={()=>setTodoModal(null)}>
+        <ModalWrap onClose={()=>setTodoModal(null)} isMobile={isMobile}>
           <div style={{fontSize:15,fontWeight:800,color:C.rose,marginBottom:16}}>🌸 할 일 {todoModal.mode==="add"?"추가":"편집"}</div>
           <KoreanInput key={todoModal?.item?.id||"new-todo"} style={inp} placeholder="할 일 내용" value={todoForm.title||""} onChange={v=>setTodoForm(p=>({...p,title:v}))} autoFocus/>
           <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,padding:"10px 14px",background:"#FFF0F5",borderRadius:12,border:`1.5px solid ${C.border}`}}>
@@ -593,7 +604,7 @@ export default function App() {
       )}
 
       {catModal&&(
-        <ModalWrap onClose={()=>setCatModal(null)}>
+        <ModalWrap onClose={()=>setCatModal(null)} isMobile={isMobile}>
           <div style={{fontSize:15,fontWeight:800,color:C.rose,marginBottom:16}}>🍅 분류 {catModal==="add"?"추가":"편집"}</div>
           <KoreanInput key={"emoji-"+(catModal?.id||"new")} style={inp} placeholder="이모지" value={catForm.emoji||""} onChange={v=>setCatForm(p=>({...p,emoji:v}))}/>
           <KoreanInput key={"name-"+(catModal?.id||"new")} style={inp} placeholder="분류 이름" value={catForm.name||""} onChange={v=>setCatForm(p=>({...p,name:v}))} autoFocus/>
@@ -610,7 +621,7 @@ export default function App() {
       )}
 
       {shareCard&&(
-        <ModalWrap onClose={()=>setShareCard(false)} zIndex={300}>
+        <ModalWrap onClose={()=>setShareCard(false)} zIndex={300} isMobile={isMobile}>
           <div style={{fontSize:15,fontWeight:800,color:C.rose,marginBottom:16,textAlign:"center"}}>📸 오늘의 달성률 카드</div>
           <div ref={cardRef} style={{background:"linear-gradient(135deg,#fff0f3,#ffe4ec)",borderRadius:20,padding:"24px 20px",border:`2px solid ${C.border}`,marginBottom:16}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
