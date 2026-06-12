@@ -47,15 +47,55 @@ const INIT_TODOS = {
 function load(key,fb){ try{ const v=localStorage.getItem(key); return v?JSON.parse(v):fb; }catch{ return fb; } }
 function save(key,v){ try{ localStorage.setItem(key,JSON.stringify(v)); }catch{} }
 
-// ── 한글 IME 훅 ───────────────────────────────────────────────
-function useKoreanInput(value, onChange) {
+// ── 한글 IME 안전 입력 컴포넌트 ─────────────────────────────
+function KoreanInput({ value, onChange, style, placeholder, autoFocus, type="text" }) {
   const composing = useRef(false);
-  return {
-    value,
-    onChange: (e) => { if (!composing.current) onChange(e.target.value); },
-    onCompositionStart: () => { composing.current = true; },
-    onCompositionEnd: (e) => { composing.current = false; onChange(e.target.value); },
-  };
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (ref.current && ref.current.value !== value) {
+      ref.current.value = value;
+    }
+  }, [value]);
+
+  return (
+    <input
+      ref={ref}
+      type={type}
+      defaultValue={value}
+      placeholder={placeholder}
+      autoFocus={autoFocus}
+      style={style}
+      onCompositionStart={() => { composing.current = true; }}
+      onCompositionEnd={(e) => { composing.current = false; onChange(e.target.value); }}
+      onChange={(e) => { if (!composing.current) onChange(e.target.value); }}
+    />
+  );
+}
+
+function KoreanTextarea({ value, onChange, style, placeholder, rows, onKeyDown }) {
+  const composing = useRef(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (ref.current && ref.current.value !== value) {
+      ref.current.value = value;
+    }
+  }, [value]);
+
+  return (
+    <textarea
+      ref={ref}
+      defaultValue={value}
+      placeholder={placeholder}
+      rows={rows}
+      style={style}
+      onKeyDown={onKeyDown}
+      onCompositionStart={() => { composing.current = true; }}
+      onCompositionEnd={(e) => { composing.current = false; onChange(e.target.value); }}
+      onChange={(e) => { if (!composing.current) onChange(e.target.value); }}
+    />
+  );
 }
 
 function Ring({pct,size=56,stroke=5,color=C.rose,bg=C.pink1}) {
@@ -121,13 +161,6 @@ export default function App() {
   const setCatsS  =v=>{ const n=typeof v==="function"?v(cats):v;   setCats(n);   save("jjanto_cats",n);   };
   const setMemosS =v=>{ const n=typeof v==="function"?v(memos):v;  setMemos(n);  save("jjanto_memos",n);  };
 
-  // ── 한글 IME 바인딩 ──────────────────────────────────────────
-  const eventTitleBind = useKoreanInput(form.title||"", v=>setForm(p=>({...p,title:v})));
-  const todoTitleBind  = useKoreanInput(todoForm.title||"", v=>setTodoForm(p=>({...p,title:v})));
-  const catNameBind    = useKoreanInput(catForm.name||"", v=>setCatForm(p=>({...p,name:v})));
-  const catEmojiBind   = useKoreanInput(catForm.emoji||"", v=>setCatForm(p=>({...p,emoji:v})));
-  const memoInputBind  = useKoreanInput(memoInput, v=>setMemoInput(v));
-
   function addMemo() {
     if(!memoInput.trim()) return;
     setMemosS(p=>[{id:genId(), text:memoInput.trim(), createdAt:new Date().toISOString()}, ...p]);
@@ -140,9 +173,7 @@ export default function App() {
     const blob = new Blob([JSON.stringify(data, null, 2)], {type:"application/json"});
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a");
-    a.href     = url;
-    a.download = `짠토플래너_${todayStr}.json`;
-    a.click();
+    a.href=url; a.download=`짠토플래너_${todayStr}.json`; a.click();
     URL.revokeObjectURL(url);
   }
 
@@ -154,9 +185,7 @@ export default function App() {
       try {
         const data = JSON.parse(ev.target.result);
         if(!data.events || !data.todos || !data.cats) throw new Error("올바른 파일이 아니에요");
-        setEventsS(data.events);
-        setTodosS(data.todos);
-        setCatsS(data.cats);
+        setEventsS(data.events); setTodosS(data.todos); setCatsS(data.cats);
         if(data.memos) setMemosS(data.memos);
         setImportMsg({ type:"ok", text:`✅ 불러오기 완료! (${data.exportedAt ? new Date(data.exportedAt).toLocaleString("ko-KR") : "날짜 없음"} 저장본)` });
       } catch(err) {
@@ -447,9 +476,9 @@ export default function App() {
       <div style={{maxWidth:600,margin:"0 auto"}}>
         <div style={{fontSize:18,fontWeight:800,color:C.rose,marginBottom:16}}>🗒️ 메모</div>
         <div style={{display:"flex",gap:8,marginBottom:20,alignItems:"flex-end"}}>
-          {/* ✅ 메모 입력 한글 IME 훅 적용 */}
-          <textarea
-            {...memoInputBind}
+          <KoreanTextarea
+            value={memoInput}
+            onChange={setMemoInput}
             onKeyDown={e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); addMemo(); } }}
             placeholder="메모를 입력하세요... (Enter로 저장)"
             rows={3}
@@ -480,7 +509,6 @@ export default function App() {
   return (
     <div style={{display:"flex",height:"100vh",fontFamily:"'Nunito','Apple SD Gothic Neo',sans-serif",background:C.bg,color:C.text,overflow:"hidden",flexDirection:"column"}}>
 
-      {/* 데스크탑 */}
       {!isMobile&&(
         <div style={{display:"flex",flex:1,overflow:"hidden"}}>
           <aside style={{width:sideOpen?260:0,minWidth:sideOpen?260:0,background:"linear-gradient(160deg,#fff0f3,#ffe4ec)",borderRight:`1.5px solid ${C.border}`,display:"flex",flexDirection:"column",overflow:"hidden",transition:"all .25s",flexShrink:0}}>
@@ -504,7 +532,6 @@ export default function App() {
         </div>
       )}
 
-      {/* 모바일 */}
       {isMobile&&(
         <div style={{display:"flex",flexDirection:"column",flex:1,overflow:"hidden"}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 16px",background:C.white,borderBottom:`1.5px solid ${C.border}`,flexShrink:0}}>
@@ -536,12 +563,11 @@ export default function App() {
 
       {syncModal&&<SyncModal/>}
 
-      {/* ✅ 이벤트 모달 - 제목 한글 IME 훅 적용 */}
       {(modal==="addEvent"||modal==="editEvent")&&(
         <ModalWrap onClose={()=>setModal(null)}>
           <div style={{fontSize:16,fontWeight:800,color:C.rose,marginBottom:16}}>🍅 {modal==="addEvent"?"새 일정 추가":"일정 편집"}</div>
           <label style={{fontSize:11,fontWeight:800,color:C.sub,marginBottom:4,display:"block"}}>제목</label>
-          <input style={inp} placeholder="일정 제목" {...eventTitleBind} autoFocus/>
+          <KoreanInput style={inp} placeholder="일정 제목" value={form.title||""} onChange={v=>setForm(p=>({...p,title:v}))} autoFocus/>
           <label style={{fontSize:11,fontWeight:800,color:C.sub,marginBottom:6,display:"block"}}>분류</label>
           <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
             {activeCats.map(cat=><button key={cat.id} onClick={()=>setForm(p=>({...p,catId:cat.id,color:cat.color}))} style={{display:"flex",alignItems:"center",gap:4,padding:"5px 12px",borderRadius:99,border:`2px solid ${form.catId===cat.id?cat.color:C.border}`,background:form.catId===cat.id?cat.color+"22":C.white,color:form.catId===cat.id?cat.color:C.sub,cursor:"pointer",fontSize:12,fontWeight:700}}>{cat.emoji} {cat.name}</button>)}
@@ -554,13 +580,13 @@ export default function App() {
           </div>
           {form.allDay?(
             <div style={{display:"flex",gap:10}}>
-              <div style={{flex:1}}><label style={{fontSize:11,fontWeight:800,color:C.sub,marginBottom:4,display:"block"}}>시작일</label><input type="date" style={inp} value={form.date} onChange={e=>setForm(p=>({...p,date:e.target.value}))}/></div>
-              <div style={{flex:1}}><label style={{fontSize:11,fontWeight:800,color:C.sub,marginBottom:4,display:"block"}}>종료일</label><input type="date" style={inp} value={form.endDate||form.date} min={form.date} onChange={e=>setForm(p=>({...p,endDate:e.target.value}))}/></div>
+              <div style={{flex:1}}><label style={{fontSize:11,fontWeight:800,color:C.sub,marginBottom:4,display:"block"}}>시작일</label><input type="date" style={inp} value={form.date||""} onChange={e=>setForm(p=>({...p,date:e.target.value}))}/></div>
+              <div style={{flex:1}}><label style={{fontSize:11,fontWeight:800,color:C.sub,marginBottom:4,display:"block"}}>종료일</label><input type="date" style={inp} value={form.endDate||form.date||""} min={form.date} onChange={e=>setForm(p=>({...p,endDate:e.target.value}))}/></div>
             </div>
           ):(
             <div style={{display:"flex",gap:10}}>
-              <div style={{flex:1}}><label style={{fontSize:11,fontWeight:800,color:C.sub,marginBottom:4,display:"block"}}>날짜</label><input type="date" style={inp} value={form.date} onChange={e=>setForm(p=>({...p,date:e.target.value}))}/></div>
-              <div style={{flex:1}}><label style={{fontSize:11,fontWeight:800,color:C.sub,marginBottom:4,display:"block"}}>시간</label><input type="time" style={inp} value={form.time} onChange={e=>setForm(p=>({...p,time:e.target.value}))}/></div>
+              <div style={{flex:1}}><label style={{fontSize:11,fontWeight:800,color:C.sub,marginBottom:4,display:"block"}}>날짜</label><input type="date" style={inp} value={form.date||""} onChange={e=>setForm(p=>({...p,date:e.target.value}))}/></div>
+              <div style={{flex:1}}><label style={{fontSize:11,fontWeight:800,color:C.sub,marginBottom:4,display:"block"}}>시간</label><input type="time" style={inp} value={form.time||""} onChange={e=>setForm(p=>({...p,time:e.target.value}))}/></div>
             </div>
           )}
           <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:4}}>
@@ -571,11 +597,10 @@ export default function App() {
         </ModalWrap>
       )}
 
-      {/* ✅ 할일 모달 - 한글 IME 훅 적용 */}
       {todoModal&&(
         <ModalWrap onClose={()=>setTodoModal(null)}>
           <div style={{fontSize:15,fontWeight:800,color:C.rose,marginBottom:16}}>🌸 할 일 {todoModal.mode==="add"?"추가":"편집"}</div>
-          <input style={inp} placeholder="할 일 내용" {...todoTitleBind} autoFocus/>
+          <KoreanInput style={inp} placeholder="할 일 내용" value={todoForm.title||""} onChange={v=>setTodoForm(p=>({...p,title:v}))} autoFocus/>
           <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,padding:"10px 14px",background:"#FFF0F5",borderRadius:12,border:`1.5px solid ${C.border}`}}>
             <span>🔁</span><div style={{flex:1}}><div style={{fontSize:13,fontWeight:700}}>매일 반복 (루틴)</div><div style={{fontSize:10,color:C.sub}}>날짜 없이 등록하면 매일 보여요</div></div>
             <div onClick={()=>setTodoForm(p=>({...p,date:p.date?"":selDate}))} style={{width:42,height:24,borderRadius:99,background:!todoForm.date?C.rose:C.pink1,cursor:"pointer",position:"relative"}}>
@@ -591,12 +616,11 @@ export default function App() {
         </ModalWrap>
       )}
 
-      {/* ✅ 분류 모달 - 이름/이모지 한글 IME 훅 적용 */}
       {catModal&&(
         <ModalWrap onClose={()=>setCatModal(null)}>
           <div style={{fontSize:15,fontWeight:800,color:C.rose,marginBottom:16}}>🍅 분류 {catModal==="add"?"추가":"편집"}</div>
-          <input style={inp} placeholder="이모지" {...catEmojiBind}/>
-          <input style={inp} placeholder="분류 이름" {...catNameBind} autoFocus/>
+          <KoreanInput style={inp} placeholder="이모지" value={catForm.emoji||""} onChange={v=>setCatForm(p=>({...p,emoji:v}))}/>
+          <KoreanInput style={inp} placeholder="분류 이름" value={catForm.name||""} onChange={v=>setCatForm(p=>({...p,name:v}))} autoFocus/>
           <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
             {[C.rose,C.tomato,C.pink3,C.pink2,"#FFB347","#7EC8A4","#B39DDB","#64B5F6","#F06292","#4DB6AC"].map(c=><div key={c} onClick={()=>setCatForm(p=>({...p,color:c}))} style={{width:26,height:26,borderRadius:"50%",background:c,cursor:"pointer",outline:catForm.color===c?`3px solid ${c}`:"none",outlineOffset:2}}/>)}
           </div>
