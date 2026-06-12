@@ -47,69 +47,35 @@ const INIT_TODOS = {
 function load(key,fb){ try{ const v=localStorage.getItem(key); return v?JSON.parse(v):fb; }catch{ return fb; } }
 function save(key,v){ try{ localStorage.setItem(key,JSON.stringify(v)); }catch{} }
 
+// 한글 IME: value prop을 아예 쓰지 않음. 모달 초기값은 key로 리마운트해서 defaultValue로만 반영.
 function KoreanInput({ value, onChange, style, placeholder, autoFocus, type="text" }) {
-  const [local, setLocal] = useState(value);
   const composing = useRef(false);
-
-  // 외부에서 값이 바뀔 때만 (모달 열릴 때 등) 동기화
-  const prevValue = useRef(value);
-  useEffect(() => {
-    if (prevValue.current !== value) {
-      prevValue.current = value;
-      if (!composing.current) setLocal(value);
-    }
-  }, [value]);
-
   return (
     <input
       type={type}
-      value={local}
+      defaultValue={value}
       placeholder={placeholder}
       autoFocus={autoFocus}
       style={style}
       onCompositionStart={() => { composing.current = true; }}
-      onCompositionEnd={(e) => {
-        composing.current = false;
-        setLocal(e.target.value);
-        onChange(e.target.value);
-      }}
-      onChange={(e) => {
-        setLocal(e.target.value);
-        if (!composing.current) onChange(e.target.value);
-      }}
+      onCompositionEnd={(e) => { composing.current = false; onChange(e.target.value); }}
+      onChange={(e) => { if (!composing.current) onChange(e.target.value); }}
     />
   );
 }
 
 function KoreanTextarea({ value, onChange, style, placeholder, rows, onKeyDown }) {
-  const [local, setLocal] = useState(value);
   const composing = useRef(false);
-
-  const prevValue = useRef(value);
-  useEffect(() => {
-    if (prevValue.current !== value) {
-      prevValue.current = value;
-      if (!composing.current) setLocal(value);
-    }
-  }, [value]);
-
   return (
     <textarea
-      value={local}
+      defaultValue={value}
       placeholder={placeholder}
       rows={rows}
       style={style}
       onKeyDown={onKeyDown}
       onCompositionStart={() => { composing.current = true; }}
-      onCompositionEnd={(e) => {
-        composing.current = false;
-        setLocal(e.target.value);
-        onChange(e.target.value);
-      }}
-      onChange={(e) => {
-        setLocal(e.target.value);
-        if (!composing.current) onChange(e.target.value);
-      }}
+      onCompositionEnd={(e) => { composing.current = false; onChange(e.target.value); }}
+      onChange={(e) => { if (!composing.current) onChange(e.target.value); }}
     />
   );
 }
@@ -486,6 +452,7 @@ export default function App() {
         <div style={{fontSize:18,fontWeight:800,color:C.rose,marginBottom:16}}>🗒️ 메모</div>
         <div style={{display:"flex",gap:8,marginBottom:20,alignItems:"flex-end"}}>
           <KoreanTextarea
+            key={memos.length}
             value={memoInput}
             onChange={setMemoInput}
             onKeyDown={e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); addMemo(); } }}
@@ -576,7 +543,7 @@ export default function App() {
         <ModalWrap onClose={()=>setModal(null)}>
           <div style={{fontSize:16,fontWeight:800,color:C.rose,marginBottom:16}}>🍅 {modal==="addEvent"?"새 일정 추가":"일정 편집"}</div>
           <label style={{fontSize:11,fontWeight:800,color:C.sub,marginBottom:4,display:"block"}}>제목</label>
-          <KoreanInput style={inp} placeholder="일정 제목" value={form.title||""} onChange={v=>setForm(p=>({...p,title:v}))} autoFocus/>
+          <KoreanInput key={form.id||"new-event"} style={inp} placeholder="일정 제목" value={form.title||""} onChange={v=>setForm(p=>({...p,title:v}))} autoFocus/>
           <label style={{fontSize:11,fontWeight:800,color:C.sub,marginBottom:6,display:"block"}}>분류</label>
           <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
             {activeCats.map(cat=><button key={cat.id} onClick={()=>setForm(p=>({...p,catId:cat.id,color:cat.color}))} style={{display:"flex",alignItems:"center",gap:4,padding:"5px 12px",borderRadius:99,border:`2px solid ${form.catId===cat.id?cat.color:C.border}`,background:form.catId===cat.id?cat.color+"22":C.white,color:form.catId===cat.id?cat.color:C.sub,cursor:"pointer",fontSize:12,fontWeight:700}}>{cat.emoji} {cat.name}</button>)}
@@ -609,7 +576,7 @@ export default function App() {
       {todoModal&&(
         <ModalWrap onClose={()=>setTodoModal(null)}>
           <div style={{fontSize:15,fontWeight:800,color:C.rose,marginBottom:16}}>🌸 할 일 {todoModal.mode==="add"?"추가":"편집"}</div>
-          <KoreanInput style={inp} placeholder="할 일 내용" value={todoForm.title||""} onChange={v=>setTodoForm(p=>({...p,title:v}))} autoFocus/>
+          <KoreanInput key={todoModal?.item?.id||"new-todo"} style={inp} placeholder="할 일 내용" value={todoForm.title||""} onChange={v=>setTodoForm(p=>({...p,title:v}))} autoFocus/>
           <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,padding:"10px 14px",background:"#FFF0F5",borderRadius:12,border:`1.5px solid ${C.border}`}}>
             <span>🔁</span><div style={{flex:1}}><div style={{fontSize:13,fontWeight:700}}>매일 반복 (루틴)</div><div style={{fontSize:10,color:C.sub}}>날짜 없이 등록하면 매일 보여요</div></div>
             <div onClick={()=>setTodoForm(p=>({...p,date:p.date?"":selDate}))} style={{width:42,height:24,borderRadius:99,background:!todoForm.date?C.rose:C.pink1,cursor:"pointer",position:"relative"}}>
@@ -628,8 +595,8 @@ export default function App() {
       {catModal&&(
         <ModalWrap onClose={()=>setCatModal(null)}>
           <div style={{fontSize:15,fontWeight:800,color:C.rose,marginBottom:16}}>🍅 분류 {catModal==="add"?"추가":"편집"}</div>
-          <KoreanInput style={inp} placeholder="이모지" value={catForm.emoji||""} onChange={v=>setCatForm(p=>({...p,emoji:v}))}/>
-          <KoreanInput style={inp} placeholder="분류 이름" value={catForm.name||""} onChange={v=>setCatForm(p=>({...p,name:v}))} autoFocus/>
+          <KoreanInput key={"emoji-"+(catModal?.id||"new")} style={inp} placeholder="이모지" value={catForm.emoji||""} onChange={v=>setCatForm(p=>({...p,emoji:v}))}/>
+          <KoreanInput key={"name-"+(catModal?.id||"new")} style={inp} placeholder="분류 이름" value={catForm.name||""} onChange={v=>setCatForm(p=>({...p,name:v}))} autoFocus/>
           <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
             {[C.rose,C.tomato,C.pink3,C.pink2,"#FFB347","#7EC8A4","#B39DDB","#64B5F6","#F06292","#4DB6AC"].map(c=><div key={c} onClick={()=>setCatForm(p=>({...p,color:c}))} style={{width:26,height:26,borderRadius:"50%",background:c,cursor:"pointer",outline:catForm.color===c?`3px solid ${c}`:"none",outlineOffset:2}}/>)}
           </div>
