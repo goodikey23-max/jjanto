@@ -21,9 +21,18 @@ const MONTHS_KO = ["1월","2월","3월","4월","5월","6월","7월","8월","9월
 function genId()     { return Math.random().toString(36).slice(2,9); }
 function fmtDate(d)  { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
 function isSame(a,b) { return fmtDate(new Date(a))===fmtDate(new Date(b)); }
-function getWeekOfMonth(ds) {
-  const d=new Date(ds), fd=new Date(d.getFullYear(),d.getMonth(),1).getDay();
-  return Math.ceil((d.getDate()+fd)/7);
+
+// ── 월요일 기준 주차 계산 ─────────────────────────────────────────────────
+// 해당 날짜가 그 달의 몇 번째 "월요일 시작 주"인지 반환
+function getWeekOfMonthMon(ds) {
+  const d = new Date(ds);
+  const y = d.getFullYear(), m = d.getMonth();
+  // 그 달 1일의 요일 (0=일,1=월,...,6=토) → 월요일 기준 오프셋
+  const firstDay = new Date(y, m, 1).getDay();
+  // 월요일 기준: 일요일(0)→6, 월요일(1)→0, ..., 토요일(6)→5
+  const firstOffset = (firstDay + 6) % 7;
+  const dayOfMonth = d.getDate();
+  return Math.ceil((dayOfMonth + firstOffset) / 7);
 }
 
 const today    = new Date();
@@ -47,8 +56,6 @@ const INIT_TODOS = {
 function load(key,fb){ try{ const v=localStorage.getItem(key); return v?JSON.parse(v):fb; }catch{ return fb; } }
 function save(key,v){ try{ localStorage.setItem(key,JSON.stringify(v)); }catch{} }
 
-// ── 한글 IME 입력: uncontrolled + 조합 중 상태 업데이트 차단 ──────────────
-// 반드시 App 밖 최상위에 정의해야 함 (안에 있으면 매 렌더마다 리마운트되어 IME 깨짐)
 function KoreanInput({ value, onChange, style, placeholder, autoFocus, type="text" }) {
   const composing = useRef(false);
   return (
@@ -81,7 +88,6 @@ function KoreanTextarea({ value, onChange, style, placeholder, rows, onKeyDown }
   );
 }
 
-// ── UI 공통 컴포넌트 (최상위 정의) ───────────────────────────────────────
 function ModalWrap({children, onClose, zIndex=100, isMobile}) {
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(60,20,30,.38)",display:"flex",alignItems:isMobile?"flex-end":"center",justifyContent:"center",zIndex}} onClick={onClose}>
@@ -116,7 +122,179 @@ function Bar({pct,color}) {
 
 const inp = {width:"100%",padding:"9px 12px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:14,outline:"none",boxSizing:"border-box",marginBottom:12,fontFamily:"inherit",background:"#FFF8FA",color:C.text};
 
-// ── 각 뷰 컴포넌트 (최상위 정의) ─────────────────────────────────────────
+// ── 주간 달성률 뷰 ────────────────────────────────────────────────────────
+function WeeklyView({ isMobile, curDate, setCurDate, todos, activeCats, isDone }) {
+  const y = curDate.getFullYear(), m = curDate.getMonth();
+  const lastDay = new Date(y, m+1, 0).getDate();
+
+  // 이 달의 모든 날짜를 월요일 기준 주차별로 그룹핑
+  const weekMap = {};
+  for (let d = 1; d <= lastDay; d++) {
+    const ds = fmtDate(new Date(y, m, d));
+    const wn = getWeekOfMonthMon(ds);
+    if (!weekMap[wn]) weekMap[wn] = [];
+    weekMap[wn].push(ds);
+  }
+  const weeks = Object.keys(weekMap).map(Number).sort((a,b)=>a-b);
+
+  // 특정 날짜의 할일 전체 (루틴 포함)
+  function todosOnDate(ds) {
+    return activeCats.flatMap(c =>
+      (todos[c.id]||[]).filter(t =>
+        !t.archived &&
+        (!t.date || isSame(t.date, ds)) &&
+        (!t.startDate || ds >= t.startDate)
+      ).map(t => ({ ...t, catId: c.id, done: isDone(t, ds) }))
+    );
+  }
+
+  // 주차별 통계 계산
+  function weekStats(wn) {
+    const days = weekMap[wn];
+    let total = 0, done = 0;
+    const catStats = {};
+    activeCats.forEach(c => { catStats[c.id] = { total: 0, done: 0 }; });
+
+    days.forEach(ds => {
+      activeCats.forEach(cat => {
+        const items = (todos[cat.id]||[]).filter(t =>
+          !t.archived &&
+          (!t.date || isSame(t.date, ds)) &&
+          (!t.startDate || ds >= t.startDate)
+        );
+        items.forEach(t => {
+          const d = isDone(t, ds);
+          total++; if(d) done++;
+          catStats[cat.id].total++;
+          if(d) catStats[cat.id].done++;
+        });
+      });
+    });
+    const pct = total ? Math.round(done/total*100) : null;
+    return { days, total, done, pct, catStats };
+  }
+
+  // 일별 달성률
+  function dayPct(ds) {
+    const items = todosOnDate(ds);
+    return items.length ? Math.round(items.filter(t=>t.done).length/items.length*100) : null;
+  }
+
+  const DAY_LABELS_MON = ["월","화","수","목","금","토","일"];
+
+  return (
+    <div style={{flex:1,overflow:"auto",padding:isMobile?"14px 14px 80px":"20px 28px"}}>
+      {/* 헤더 */}
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20,flexWrap:"wrap"}}>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <button onClick={()=>{const d=new Date(curDate);d.setMonth(d.getMonth()-1);setCurDate(d);}} style={{background:C.pink1,border:"none",borderRadius:8,padding:"5px 10px",cursor:"pointer",color:C.rose,fontWeight:700}}>‹</button>
+          <span style={{fontSize:16,fontWeight:800,color:C.rose}}>{y}년 {MONTHS_KO[m]}</span>
+          <button onClick={()=>{const d=new Date(curDate);d.setMonth(d.getMonth()+1);setCurDate(d);}} style={{background:C.pink1,border:"none",borderRadius:8,padding:"5px 10px",cursor:"pointer",color:C.rose,fontWeight:700}}>›</button>
+        </div>
+        <div style={{fontSize:12,color:C.sub,background:C.pink1,padding:"4px 10px",borderRadius:99,fontWeight:700}}>📅 월요일 기준 주차</div>
+      </div>
+
+      {/* 주차별 카드 */}
+      <div style={{display:"flex",flexDirection:"column",gap:14}}>
+        {weeks.map(wn => {
+          const { days, total, done, pct, catStats } = weekStats(wn);
+          const isCurrentWeek = days.some(ds => ds === todayStr);
+
+          return (
+            <div key={wn} style={{
+              background: isCurrentWeek ? "linear-gradient(135deg,#FFF0F3,#FFE4EC)" : C.white,
+              borderRadius:18,
+              border: isCurrentWeek ? `2px solid ${C.rose}` : `1.5px solid ${C.border}`,
+              padding: isMobile?"14px 14px":"18px 22px",
+              boxShadow: isCurrentWeek ? `0 4px 20px ${C.rose}22` : `0 2px 8px ${C.pink1}`,
+              position:"relative",
+            }}>
+              {isCurrentWeek && (
+                <div style={{position:"absolute",top:-10,left:16,background:C.rose,color:C.white,fontSize:10,fontWeight:800,padding:"2px 10px",borderRadius:99}}>이번 주 ✨</div>
+              )}
+
+              {/* 주차 헤더 */}
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+                <div>
+                  <span style={{fontSize:16,fontWeight:800,color:C.rose}}>{wn}주차</span>
+                  <span style={{fontSize:12,color:C.sub,marginLeft:8}}>
+                    {days[0].slice(5).replace("-","/")} ~ {days[days.length-1].slice(5).replace("-","/")}
+                  </span>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:12,color:C.sub,fontWeight:600}}>{done}/{total} 완료</span>
+                  <Ring pct={pct||0} size={52} stroke={5} color={isCurrentWeek?C.rose:C.pink3} bg={C.pink1}/>
+                </div>
+              </div>
+
+              {/* 일별 달성률 바 */}
+              <div style={{display:"grid",gridTemplateColumns:`repeat(${days.length},1fr)`,gap:4,marginBottom:14}}>
+                {/* 월~일 순서로 정렬 */}
+                {days.slice().sort((a,b)=>a.localeCompare(b)).map(ds => {
+                  const dp = dayPct(ds);
+                  const isToday = ds === todayStr;
+                  const dow = new Date(ds).getDay(); // 0=일,1=월,...
+                  const dowLabel = DAYS_KO[dow];
+                  return (
+                    <div key={ds} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+                      <span style={{fontSize:10,fontWeight:isToday?800:600,color:isToday?C.rose:[0,6].includes(dow)?C.pink3:C.sub}}>{dowLabel}</span>
+                      <div style={{
+                        width:"100%",
+                        height: isMobile?40:54,
+                        borderRadius:8,
+                        background: C.pink1,
+                        position:"relative",
+                        overflow:"hidden",
+                        border: isToday?`2px solid ${C.rose}`:"none",
+                      }}>
+                        {dp!==null && (
+                          <div style={{
+                            position:"absolute",
+                            bottom:0,left:0,right:0,
+                            height:`${dp}%`,
+                            background: isToday
+                              ? `linear-gradient(180deg,${C.rose},${C.pink3})`
+                              : dp===100?"#7EC8A4":`linear-gradient(180deg,${C.pink3},${C.pink2})`,
+                            borderRadius:6,
+                            transition:"height .5s",
+                          }}/>
+                        )}
+                      </div>
+                      <span style={{fontSize:dp===null?9:10,fontWeight:700,color:isToday?C.rose:dp===100?"#7EC8A4":C.sub}}>
+                        {dp===null?"—":dp+"%"}
+                      </span>
+                      <span style={{fontSize:9,color:C.sub}}>{ds.slice(8)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* 카테고리별 달성률 */}
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                {activeCats.map(cat => {
+                  const cs = catStats[cat.id];
+                  if (cs.total === 0) return null;
+                  const cp = Math.round(cs.done/cs.total*100);
+                  return (
+                    <div key={cat.id} style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{fontSize:14,flexShrink:0}}>{cat.emoji}</span>
+                      <span style={{fontSize:12,fontWeight:700,color:C.text,minWidth:isMobile?36:48,flexShrink:0}}>{cat.name}</span>
+                      <Bar pct={cp} color={cat.color}/>
+                      <span style={{fontSize:12,fontWeight:800,color:cat.color,minWidth:30,textAlign:"right"}}>{cp}%</span>
+                      <span style={{fontSize:10,color:C.sub,minWidth:isMobile?28:36,textAlign:"right"}}>{cs.done}/{cs.total}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Sidebar ───────────────────────────────────────────────────────────────
 function SyncModal({onClose, handleExport, handleImport, importRef, importMsg, isMobile}) {
   return (
     <ModalWrap onClose={onClose} zIndex={200} isMobile={isMobile}>
@@ -151,7 +329,7 @@ function Sidebar({isMobile, view, setView, setSyncModal, sideFilter, setSideFilt
       <button onClick={()=>setSyncModal(true)} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 12px",borderRadius:12,cursor:"pointer",fontSize:13,fontWeight:700,background:"linear-gradient(135deg,#E8F5E9,#F0FFF8)",color:"#2E7D32",border:"1.5px solid #A5D6A7",width:"100%",textAlign:"left",marginBottom:6}}>
         <span>🔄</span> 기기 간 데이터 동기화<span style={{marginLeft:"auto",fontSize:10,opacity:.7}}>내보내기 / 가져오기</span>
       </button>
-      {!isMobile&&[["month","🗓️","월간 캘린더"],["list","✅","할 일 목록"]].map(([v,ic,lb])=>(
+      {!isMobile&&[["month","🗓️","월간 캘린더"],["list","✅","할 일 목록"],["weekly","📊","주간 달성률"],["memo","🗒️","메모"]].map(([v,ic,lb])=>(
         <button key={v} onClick={()=>setView(v)} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderRadius:12,cursor:"pointer",fontSize:14,fontWeight:view===v?700:500,background:view===v?C.pink2:"transparent",color:view===v?C.white:C.sub,border:"none",width:"100%",textAlign:"left"}}>
           <span>{ic}</span>{lb}
         </button>
@@ -387,7 +565,7 @@ function MemoView({isMobile, memos, memoInput, setMemoInput, addMemo, deleteMemo
   );
 }
 
-// ── 메인 App: 상태 관리만 담당 ────────────────────────────────────────────
+// ── 메인 App ──────────────────────────────────────────────────────────────
 export default function App() {
   const [isMobile, setIsMobile] = useState(()=>window.innerWidth<768);
   useState(()=>{ const h=()=>setIsMobile(window.innerWidth<768); window.addEventListener("resize",h); return ()=>window.removeEventListener("resize",h); });
@@ -453,28 +631,45 @@ export default function App() {
 
   const activeCats=cats.filter(c=>!c.hidden);
   const catById=id=>cats.find(c=>c.id===id);
-  // 루틴(date 없음)은 doneLog[날짜] 로 날짜별 완료 상태를 별도 관리
+
+  // 루틴(date 없음): doneLog[날짜]로 날짜별 완료 상태 관리
   const isDone=(item,ds)=>item.date ? item.done : !!(item.doneLog && item.doneLog[ds]);
+
   // allTodosOn: archived 포함 (통계 반영용)
   const allTodosOn=ds=>activeCats.flatMap(c=>(todos[c.id]||[]).filter(t=>(!t.date||isSame(t.date,ds))&&(!t.startDate||ds>=t.startDate)).map(t=>({...t,done:isDone(t,ds)})));
   // visibleTodosOn: archived 제외 (화면 표시용)
   const visibleTodosOn=(cid,ds)=>(todos[cid]||[]).filter(t=>!t.archived&&(!t.date||isSame(t.date,ds))&&(!t.startDate||ds>=t.startDate)).map(t=>({...t,done:isDone(t,ds)}));
   const totalPctOn=ds=>{ const a=allTodosOn(ds); return a.length?Math.round(a.filter(t=>t.done).length/a.length*100):0; };
   const catPctOn=(cid,ds)=>{ const i=(todos[cid]||[]).filter(t=>(!t.date||isSame(t.date,ds))&&(!t.startDate||ds>=t.startDate)); return i.length?Math.round(i.filter(t=>isDone(t,ds)).length/i.length*100):0; };
-  function weeklyPct(wn,cid) {
-    const y=curDate.getFullYear(),m=curDate.getMonth(),last=new Date(y,m+1,0).getDate();
-    let done=0,total=0;
-    for(let d=1;d<=last;d++){
-      const ds=fmtDate(new Date(y,m,d));
-      if(getWeekOfMonth(ds)!==wn) continue;
-      const items=cid?(todos[cid]||[]).filter(t=>t.date?isSame(t.date,ds):true):activeCats.flatMap(c=>(todos[c.id]||[]).filter(t=>t.date?isSame(t.date,ds):true));
-      total+=items.length; done+=items.filter(t=>t.done).length;
+
+  // ── 수정된 weeklyPct: 월요일 기준 주차 + isDone으로 루틴 완료 반영 ──────
+  function weeklyPct(wn, cid) {
+    const y=curDate.getFullYear(), m=curDate.getMonth(), last=new Date(y,m+1,0).getDate();
+    let done=0, total=0;
+    for(let d=1; d<=last; d++) {
+      const ds = fmtDate(new Date(y,m,d));
+      if(getWeekOfMonthMon(ds) !== wn) continue;
+      const catList = cid ? [cid] : activeCats.map(c=>c.id);
+      catList.forEach(cId => {
+        const items = (todos[cId]||[]).filter(t =>
+          !t.archived &&
+          (!t.date || isSame(t.date, ds)) &&
+          (!t.startDate || ds >= t.startDate)
+        );
+        items.forEach(t => {
+          total++;
+          if(isDone(t, ds)) done++;
+        });
+      });
     }
-    return total?Math.round(done/total*100):null;
+    return total ? Math.round(done/total*100) : null;
   }
+
   function weeksInMonth(){
     const y=curDate.getFullYear(),m=curDate.getMonth(),last=new Date(y,m+1,0).getDate();
-    const ws=new Set(); for(let d=1;d<=last;d++) ws.add(getWeekOfMonth(fmtDate(new Date(y,m,d)))); return [...ws].sort();
+    const ws=new Set();
+    for(let d=1;d<=last;d++) ws.add(getWeekOfMonthMon(fmtDate(new Date(y,m,d))));
+    return [...ws].sort();
   }
   const eventsOn=ds=>events.filter(e=>e.allDay&&e.endDate?ds>=e.date&&ds<=e.endDate:isSame(e.date,ds)).sort((a,b)=>(a.time||"").localeCompare(b.time||""));
 
@@ -488,7 +683,6 @@ export default function App() {
   function deleteTodo(cid,id){
     const item=(todos[cid]||[]).find(t=>t.id===id);
     if(item && !item.date) {
-      // 루틴: 숨김 처리로 과거 기록 보존
       setTodosS(p=>({...p,[cid]:p[cid].map(t=>t.id===id?{...t,archived:true}:t)}));
     } else {
       setTodosS(p=>({...p,[cid]:p[cid].filter(t=>t.id!==id)}));
@@ -498,7 +692,7 @@ export default function App() {
   function toggleTodo(cid,id,ds){
     setTodosS(p=>({...p,[cid]:p[cid].map(t=>{
       if(t.id!==id) return t;
-      if(t.date) return {...t,done:!t.done}; // 일반 할일
+      if(t.date) return {...t,done:!t.done};
       const log={...(t.doneLog||{})};
       if(log[ds]) delete log[ds]; else log[ds]=true;
       return {...t,doneLog:log};
@@ -512,8 +706,8 @@ export default function App() {
   const cells=buildGrid(), weeks=weeksInMonth();
   const sideEvents=sideFilter==="all"?eventsOn(todayStr):eventsOn(todayStr).filter(e=>e.catId===sideFilter);
 
-  // 공통 props
   const commonProps = { isMobile, selDate, setSelDate, todayStr, allTodosOn, totalPctOn, catPctOn, activeCats, todos, visibleTodosOn, toggleTodo, openAddTodo, openAddEvent, setSyncModal, eventsOn, catById };
+  const weeklyProps = { isMobile, curDate, setCurDate, todos, activeCats, isDone };
 
   return (
     <div style={{display:"flex",height:"100vh",fontFamily:"'Nunito','Apple SD Gothic Neo',sans-serif",background:C.bg,color:C.text,overflow:"hidden",flexDirection:"column"}}>
@@ -531,11 +725,14 @@ export default function App() {
               <span style={{fontSize:16,fontWeight:800,color:C.rose}}>{curDate.getFullYear()}년 {MONTHS_KO[curDate.getMonth()]}</span>
               <button onClick={()=>{setCurDate(new Date(today.getFullYear(),today.getMonth(),1));setSelDate(todayStr);}} style={{background:C.pink2,border:"none",borderRadius:8,padding:"5px 12px",cursor:"pointer",color:C.white,fontWeight:700,fontSize:12}}>오늘</button>
               <div style={{flex:1}}/>
-              {["month","list","memo"].map(v=><button key={v} onClick={()=>setView(v)} style={{padding:"6px 14px",borderRadius:20,border:`2px solid ${view===v?C.rose:C.border}`,background:view===v?C.rose:C.white,color:view===v?C.white:C.sub,fontSize:12,cursor:"pointer",fontWeight:700}}>{v==="month"?"🗓 월간":v==="list"?"✅ 할일":"🗒️ 메모"}</button>)}
+              {[["month","🗓 월간"],["list","✅ 할일"],["weekly","📊 주간"],["memo","🗒️ 메모"]].map(([v,lb])=>(
+                <button key={v} onClick={()=>setView(v)} style={{padding:"6px 14px",borderRadius:20,border:`2px solid ${view===v?C.rose:C.border}`,background:view===v?C.rose:C.white,color:view===v?C.white:C.sub,fontSize:12,cursor:"pointer",fontWeight:700}}>{lb}</button>
+              ))}
               <button onClick={()=>openAddEvent(selDate)} style={{padding:"7px 16px",borderRadius:20,background:`linear-gradient(135deg,${C.pink3},${C.rose})`,color:C.white,border:"none",fontWeight:800,fontSize:13,cursor:"pointer"}}>🍅 추가</button>
             </div>
             {view==="month"&&<MonthView isMobile={isMobile} cells={cells} eventsOn={eventsOn} allTodosOn={allTodosOn} selDate={selDate} todayStr={todayStr} setSelDate={setSelDate} setMobileTab={setMobileTab} openEditEvent={openEditEvent}/>}
             {view==="list"&&<ListView isMobile={isMobile} selDate={selDate} setSelDate={setSelDate} todayStr={todayStr} allTodosOn={allTodosOn} totalPctOn={totalPctOn} catPctOn={catPctOn} activeCats={activeCats} todos={todos} visibleTodosOn={visibleTodosOn} openAddTodo={openAddTodo} openEditTodo={openEditTodo} toggleTodo={toggleTodo} hideCompleted={hideCompleted} setHideCompleted={setHideCompleted} setCatForm={setCatForm} setCatModal={setCatModal} setShareCard={setShareCard}/>}
+            {view==="weekly"&&<WeeklyView {...weeklyProps}/>}
             {view==="memo"&&<MemoView isMobile={isMobile} memos={memos} memoInput={memoInput} setMemoInput={setMemoInput} addMemo={addMemo} deleteMemo={deleteMemo}/>}
           </div>
         </div>
@@ -546,7 +743,7 @@ export default function App() {
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 16px",background:C.white,borderBottom:`1.5px solid ${C.border}`,flexShrink:0}}>
             <span style={{fontSize:15,fontWeight:800,color:C.rose}}>🍅 짠토의 플래너</span>
             <div style={{display:"flex",gap:6}}>
-              {mobileTab==="month"&&<><button onClick={()=>{const d=new Date(curDate);d.setMonth(d.getMonth()-1);setCurDate(d);}} style={{background:C.pink1,border:"none",borderRadius:8,padding:"5px 9px",cursor:"pointer",color:C.rose,fontWeight:700}}>‹</button><span style={{fontSize:13,fontWeight:800,color:C.rose}}>{curDate.getFullYear()}년 {MONTHS_KO[curDate.getMonth()]}</span><button onClick={()=>{const d=new Date(curDate);d.setMonth(d.getMonth()+1);setCurDate(d);}} style={{background:C.pink1,border:"none",borderRadius:8,padding:"5px 9px",cursor:"pointer",color:C.rose,fontWeight:700}}>›</button></>}
+              {(mobileTab==="month"||mobileTab==="weekly")&&<><button onClick={()=>{const d=new Date(curDate);d.setMonth(d.getMonth()-1);setCurDate(d);}} style={{background:C.pink1,border:"none",borderRadius:8,padding:"5px 9px",cursor:"pointer",color:C.rose,fontWeight:700}}>‹</button><span style={{fontSize:13,fontWeight:800,color:C.rose}}>{curDate.getFullYear()}년 {MONTHS_KO[curDate.getMonth()]}</span><button onClick={()=>{const d=new Date(curDate);d.setMonth(d.getMonth()+1);setCurDate(d);}} style={{background:C.pink1,border:"none",borderRadius:8,padding:"5px 9px",cursor:"pointer",color:C.rose,fontWeight:700}}>›</button></>}
               <button onClick={()=>openAddEvent(selDate)} style={{background:`linear-gradient(135deg,${C.pink3},${C.rose})`,border:"none",borderRadius:10,padding:"6px 12px",cursor:"pointer",color:C.white,fontWeight:800,fontSize:13}}>＋</button>
             </div>
           </div>
@@ -554,14 +751,23 @@ export default function App() {
             {mobileTab==="month"&&<MonthView isMobile={isMobile} cells={cells} eventsOn={eventsOn} allTodosOn={allTodosOn} selDate={selDate} todayStr={todayStr} setSelDate={setSelDate} setMobileTab={setMobileTab} openEditEvent={openEditEvent}/>}
             {mobileTab==="list"&&<ListView isMobile={isMobile} selDate={selDate} setSelDate={setSelDate} todayStr={todayStr} allTodosOn={allTodosOn} totalPctOn={totalPctOn} catPctOn={catPctOn} activeCats={activeCats} todos={todos} visibleTodosOn={visibleTodosOn} openAddTodo={openAddTodo} openEditTodo={openEditTodo} toggleTodo={toggleTodo} hideCompleted={hideCompleted} setHideCompleted={setHideCompleted} setCatForm={setCatForm} setCatModal={setCatModal} setShareCard={setShareCard}/>}
             {mobileTab==="today"&&<TodayMobileView {...commonProps} openEditTodo={openEditTodo}/>}
+            {mobileTab==="weekly"&&<WeeklyView {...weeklyProps}/>}
             {mobileTab==="memo"&&<MemoView isMobile={isMobile} memos={memos} memoInput={memoInput} setMemoInput={setMemoInput} addMemo={addMemo} deleteMemo={deleteMemo}/>}
           </div>
+          {/* 모바일 하단 탭바 - 주간 추가 */}
           <div style={{display:"flex",borderTop:`1.5px solid ${C.border}`,background:C.white,flexShrink:0,paddingBottom:"env(safe-area-inset-bottom)"}}>
-            {[{tab:"month",icon:"🗓️",label:"캘린더"},{tab:"today",icon:"✨",label:"오늘"},{tab:"list",icon:"✅",label:"할일"},{tab:"memo",icon:"🗒️",label:"메모"},{tab:"sync",icon:"🔄",label:"동기화"}].map(({tab,icon,label})=>(
-              <button key={tab} onClick={()=>tab==="sync"?setSyncModal(true):setMobileTab(tab)} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"8px 0",border:"none",background:"transparent",cursor:"pointer",color:mobileTab===tab?C.rose:C.sub,gap:2}}>
-                <span style={{fontSize:tab==="sync"?18:20}}>{icon}</span>
-                <span style={{fontSize:10,fontWeight:mobileTab===tab?800:500}}>{label}</span>
-                {mobileTab===tab&&tab!=="sync"&&<div style={{width:20,height:3,borderRadius:99,background:C.rose,marginTop:2}}/>}
+            {[
+              {tab:"month",  icon:"🗓️", label:"캘린더"},
+              {tab:"today",  icon:"✨",  label:"오늘"},
+              {tab:"list",   icon:"✅",  label:"할일"},
+              {tab:"weekly", icon:"📊",  label:"주간"},
+              {tab:"memo",   icon:"🗒️", label:"메모"},
+              {tab:"sync",   icon:"🔄",  label:"동기화"},
+            ].map(({tab,icon,label})=>(
+              <button key={tab} onClick={()=>tab==="sync"?setSyncModal(true):setMobileTab(tab)} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"7px 0",border:"none",background:"transparent",cursor:"pointer",color:mobileTab===tab?C.rose:C.sub,gap:1}}>
+                <span style={{fontSize:tab==="sync"?16:18}}>{icon}</span>
+                <span style={{fontSize:9,fontWeight:mobileTab===tab?800:500}}>{label}</span>
+                {mobileTab===tab&&tab!=="sync"&&<div style={{width:16,height:3,borderRadius:99,background:C.rose,marginTop:1}}/>}
               </button>
             ))}
           </div>
